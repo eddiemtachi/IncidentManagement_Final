@@ -1,0 +1,478 @@
+@page "/incidents"
+@using System.Net.Http.Json
+@layout DashboardLayout
+@using IncidentManagement.Application.Dtos.Requests
+@using IncidentManagement.Application.Dtos.Responses
+@using IncidentManagement.Shared.Models
+@using IncidentManagement.Shared.Services
+@using IncidentManagement.WebClient.Components
+@using IncidentManagement.WebClient.Services
+@using IncidentManagement.WebClient.Interfaces
+@inject HttpClient Http
+@inject IncidentService IncidentService
+@inject AuthState AuthState
+@inject UserService UserService
+@inject ILookupCacheService LookupCacheService
+
+<ConfirmDialog @ref="confirmDialog"
+               OnConfirm="ConfirmDelete"
+               OnCancel="CancelDelete" />
+
+<div class="profile-container">
+    <h2>Incident Management</h2>
+
+    <!-- Button to open modal -->
+    <button class="add-btn" @onclick="ShowModal">➕ Add New Incident</button>
+
+    <!-- Modal Popup -->
+    @if (IsModalOpen)
+    {
+        <div class="modal-overlay">
+            <div class="modal-content">
+                <h3>Capture New Incident</h3>
+
+                <label>Title</label>
+                <input type="text" @bind="NewIncident.Title" />
+
+                <label>Status</label>
+                @if (IsLoading)
+                {
+                    <p>Loading lookups...</p>
+                }
+                else
+                {
+                    <select class="form-select" @bind="SelectedStatusId">
+
+                        <option value="0">
+                            -- Select Status --
+                        </option>
+                        @foreach (var status in IncidentStatuses)
+                        {
+                            <option value="@status.StatusId">
+                                @status.StatusName
+                            </option>
+                        }
+                    </select>
+
+                    <label> Incident Category</label>
+                    <select class="form-select" @bind="IncidentCategoryId">
+
+                        <option value="0">
+                            -- Select Incident Category --
+                        </option>
+                        @foreach (var Category in IncidentCategories)
+                        {
+                            <option value="@Category.CategoryId">
+                                @Category.CategoryName
+                            </option>
+                        }
+                    </select>
+                    /* <select class="form-select" @bind="SelectedPriorityId">
+
+                         <option value="0">
+                             -- Select Priority --
+                         </option>
+                         @foreach (var Priority in IncidentPriorities)
+                         {
+                             <option value="@Priority.PriorityId">
+                                 @Priority.PriorityName
+                             </option>
+                         }
+                     </select>*/
+
+                    <label>Priority</label>
+                    <select class="form-select" @bind="SelectedPriorityId">
+
+                        <option value="0">
+                            -- Select Priority --
+                        </option>
+                        @foreach (var Priority in IncidentPriorities)
+                        {
+                            <option value="@Priority.PriorityId">
+                                @Priority.PriorityName
+                            </option>
+                        }
+                    </select>
+
+                    <!-- Role Team dropdown -->
+                    <label>Role Team</label>
+                    <select @bind="SelectedRoleId">
+                        <option value="">-- Select Role --</option>
+                        @foreach (var role in IncidentRoles)
+                        {
+                            <option value="@role.RoleId">
+                                @role.RoleName
+                            </option>
+                        }
+                    </select>
+                }
+
+                <label>Address</label>
+                <select @bind="SelectedPropertyId">
+                    @foreach (var Property in IncidentProperties)
+                    {
+                        <option value="@Property.PropertyId"> @Property.PropertyName</option>
+                    }
+                </select>
+
+                <label>Description</label>
+                <textarea @bind="NewIncident.Description"></textarea>
+
+                <div class="modal-actions">
+                    <button class="cancel-btn" @onclick="CloseModal">Cancel</button>
+                    <button class="save-btn" @onclick="SaveIncident">Save</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    <!-- Filters -->
+    <p class="subtitle">Search, filter, capture, and manage incidents</p>
+    <div class="filters">
+        <input type="text" placeholder="Search by Title"
+               value="@SearchTitle"
+               @oninput="OnSearchChanged" />
+        <select @bind="FilterStatus">
+            <option value="">All Statuses</option>
+            <option value="Open">Open</option>
+            <option value="Closed">Closed</option>
+            <option value="In Progress">In Progress</option>
+        </select>
+        <select @bind="FilterPriority">
+            <option value="">All Priorities</option>
+            <option value="Low">Low</option>
+            <option value="Medium">Medium</option>
+            <option value="High">High</option>
+        </select>
+        <select @bind="FilterAssignedTo">
+            <option value="">All Assignees</option>
+            @foreach (var user in Users)
+            {
+                <option value="@user.Username">@user.Username</option>
+            }
+        </select>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Message)) { <p class="subtitle">@Message</p> }
+    @if (IsLoading) { <p>Loading your incidents...</p> }
+    else if (!MyIncidents.Any()) { <p>No incidents have been logged by your account yet.</p> }
+    else
+    {
+        <table class="incident-table">
+            <thead><tr><th>Incident ID</th><th>Title</th><th>Category</th><th>Severity</th><th>Status</th><th>Priority</th><th>Property</th><th>Date Logged</th></tr></thead>
+            <tbody>
+                @foreach (var incident in FilteredMyIncidents)
+                {
+                    <tr><td>@incident.IncidentId</td><td>@incident.Title</td><td>@incident.CategoryName</td>
+                        <td>@incident.SeverityName</td><td>@incident.StatusName</td><td>@incident.PriorityName</td>
+                        <td>@incident.PropertyName</td><td>@incident.CreatedAt.ToLocalTime().ToString("g")</td></tr>
+                }
+            </tbody>
+        </table>
+    }
+
+    <!-- Incident Grid -->
+    @* <table class="incident-table">
+        <thead>
+            <tr>
+                <th>Incident ID</th>
+                <th>Title</th>
+                <th>Status</th>
+                <th>Priority</th>
+                <th>Assigned To</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            @* @foreach (var incident in PagedIncidents)
+            {
+             <label>Assigned To</label>
+                <select @bind="NewIncident.AssignedTo">
+                    @foreach (var user in FilteredUsersByRole)
+                    {
+                        <option value="@user.Username">@user.Username</option>
+                    }
+                </select>
+                <tr>
+                    <td>@incident.IncidentId</td>
+                    <td>@incident.Title</td>
+                    <td>@incident.Status</td>
+                    <td>@incident.Priority</td>
+                    <td>@incident.AssignedTo</td>
+                    <td data-label="Actions">
+                        @if (AuthState.IsLoggedIn && string.Equals(AuthState.CurrentUserRole, "Admin", StringComparison.OrdinalIgnoreCase))
+                        {
+                            <button class="icon-btn edit" data-tooltip="Edit Incident" @onclick="() => EditIncident(incident)">✏️</button>
+                            <button class="icon-btn danger" data-tooltip="Delete Incident" @onclick="() => AskDeleteConfirmation(incident.IncidentId)">❌</button>
+                        }
+                    </td>
+                </tr>
+            } *@
+    @*  </tbody>
+    </table>*@
+
+    <!-- Paging -->
+    @* <div class="paging-controls">
+        <button @onclick="PreviousPage" disabled="@(!HasPrevious)">Previous</button>
+        <span>Page @CurrentPage of @TotalPages</span>
+        <button @onclick="NextPage" disabled="@(!HasNext)">Next</button>
+    </div> *@
+</div>
+
+@code {
+    private bool IsModalOpen = false;
+    private Incident NewIncident = new();
+    private List<User> Users = new();
+    private List<string> Roles = new();
+    private List<User> FilteredUsersByRole = new();
+    private List<IncidentStatusResponse> IncidentStatuses = new();
+    private List<IncidentPriorityResponse> IncidentPriorities = new();
+    private List<IncidentRoleResponse> IncidentRoles = new();
+    private List<IncidentCategoryResponse> IncidentCategories = new();
+    private List<IncidentPropertyResponse> IncidentProperties = new();
+
+    private string SearchTitle = "";
+    private string FilterStatus = "";
+    private string FilterPriority = "";
+    private string FilterAssignedTo = "";
+
+    private int CurrentPage = 1;
+    private int PageSize = 3;
+
+    private ConfirmDialog confirmDialog;
+    private int pendingIncidentId;
+
+    protected override void OnInitialized()
+    {
+        Users = UserService.Users.ToList();
+        Roles = Users.Where(x => x.Role != "Tenant" && x.Role != "Resident").Select(u => u.Role).Distinct().ToList();
+        FilteredUsersByRole = new List<User>();
+    }
+
+    // Single property for binding
+    private string SelectedRole
+    {
+        get => selectedRole;
+        set
+        {
+            selectedRole = value;
+            FilteredUsersByRole = string.IsNullOrEmpty(selectedRole)
+                ? new List<User>()
+                : Users.Where(u => u.Role == selectedRole).ToList();
+        }
+    }
+
+    private int IncidentCategoryId { get; set; }
+    private int SelectedStatusId { get; set; }
+    private int SelectedPriorityId { get; set; }
+    private int SelectedRoleId { get; set; }
+    private int SelectedCategoryId { get; set; }
+    private int SelectedPropertyId { get; set; }
+
+    private string selectedRole = "";
+
+    // private List<Incident> FilteredIncidents =>
+    //     IncidentService.GetIncidentsForUser(AuthState.CurrentUser ?? string.Empty, AuthState.CurrentUserRole ?? string.Empty)
+    //     .Where(i =>
+    //         (string.IsNullOrEmpty(SearchTitle) ||
+    //          SearchTitle.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+    //                     .Take(3)
+    //                     .Any(word => i.Title.Contains(word, StringComparison.OrdinalIgnoreCase)))
+    //         && (string.IsNullOrEmpty(FilterStatus) || i.Status == FilterStatus)
+    //         && (string.IsNullOrEmpty(FilterPriority) || i.Priority == FilterPriority)
+    //         && (string.IsNullOrEmpty(FilterAssignedTo) || i.AssignedTo == FilterAssignedTo)
+    //     )
+    //     .ToList();
+
+    // private int TotalPages => (int)Math.Ceiling((double)FilteredIncidents.Count / PageSize);
+    private bool HasPrevious => CurrentPage > 1;
+    //private bool HasNext => CurrentPage < TotalPages;
+
+    // private List<Incident> PagedIncidents => FilteredIncidents
+    //     .Skip((CurrentPage - 1) * PageSize)
+    //     .Take(PageSize)
+    //     .ToList();
+
+    private IncidentModel Model = new();
+
+    private bool IsLoading;
+    private List<IncidentResponse> MyIncidents = new();
+    private IEnumerable<IncidentResponse> FilteredMyIncidents => MyIncidents.Where(i =>
+        (string.IsNullOrWhiteSpace(SearchTitle) || i.Title.Contains(SearchTitle, StringComparison.OrdinalIgnoreCase)) &&
+        (string.IsNullOrWhiteSpace(FilterStatus) || i.StatusName == FilterStatus) &&
+        (string.IsNullOrWhiteSpace(FilterPriority) || i.PriorityName == FilterPriority));
+    private string Message = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        IsLoading = true;
+        if (!AuthState.IsLoggedIn || string.IsNullOrWhiteSpace(AuthState.AccessToken))
+        {
+            Message = "Please log in to view your incidents.";
+            IsLoading = false;
+            return;
+        }
+        Http.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", AuthState.AccessToken);
+
+        try
+        {
+            MyIncidents = await Http.GetFromJsonAsync<List<IncidentResponse>>("api/Incident/my") ?? new();
+            IncidentStatuses = await LookupCacheService.GetIncidentStatusesAsync();
+            IncidentPriorities = await LookupCacheService.GetIncidentPrioritiesAsync();
+            IncidentRoles = await LookupCacheService.GetIncidentRolesAsync();
+            IncidentCategories = await LookupCacheService.GetIncidentCategoriesAsync();
+            IncidentProperties = await LookupCacheService.GetIncidentPropertiesAsync();
+
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex.Message);
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    // private async Task SaveAsync()
+    // {
+    //     // Replace with your actual save endpoint
+
+    //     var response =
+    //     await Http.PostAsJsonAsync(
+    //     "api/Incident",
+    //     Model);
+
+    //     if (response.IsSuccessStatusCode)
+    //     {
+    //         Message = "Incident created successfully.";
+    //     }
+    // }
+
+    public class IncidentModel
+    {
+        public string Title { get; set; } = string.Empty;
+
+        public int StatusId { get; set; }
+    }
+
+    public class IncidentStatusDto
+    {
+        public int StatusId { get; set; }
+
+        public string StatusName { get; set; } = string.Empty;
+    }
+    public class IncidentPriorityDto
+    {
+        public int PriorityId { get; set; }
+        public string PriorityName { get; set; } = string.Empty;
+    }
+    public class IncidentRoleDto
+    {
+        public int RoleId { get; set; }
+        public string RoleName { get; set; } = string.Empty;
+    }
+
+    public class IncidentCategoryDto
+    {
+        public int CategoryId { get; set; }
+        public string CategoryName { get; set; } = string.Empty;
+    }
+    public class IncidentPropertyDto
+    {
+        public int PropertyId { get; set; }
+        public string PropertyName { get; set; } = string.Empty;
+    }
+    private void PreviousPage() { if (HasPrevious) CurrentPage--; }
+    // private void NextPage() { if (HasNext) CurrentPage++; }
+
+    private void OnSearchChanged(ChangeEventArgs e)
+    {
+        SearchTitle = e.Value?.ToString() ?? string.Empty;
+        CurrentPage = 1;
+    }
+
+    private void ShowModal() => IsModalOpen = true;
+    private void CloseModal()
+    {
+        IsModalOpen = false;
+        NewIncident = new Incident();
+        IncidentCategoryId = 0;
+        SelectedStatusId = 0;
+        SelectedPriorityId = 0;
+        SelectedRoleId = 0;
+        SelectedRole = "";
+        FilteredUsersByRole.Clear();
+    }
+
+    private async Task SaveIncident()
+    {
+        if (string.IsNullOrWhiteSpace(NewIncident.Title) || IncidentCategoryId <= 0 ||
+            SelectedStatusId <= 0 || SelectedPriorityId <= 0)
+        {
+            Message = "Enter a title and select a category, status, and priority.";
+            return;
+        }
+
+        try
+        {
+            var createIncident = new CreateIncidentRequest(NewIncident.Title.Trim(),
+                NewIncident.Description ?? string.Empty, AuthState.CurrentUserId,
+                IncidentCategoryId, 1, SelectedStatusId, SelectedPriorityId, SelectedPropertyId);
+            var response = await Http.PostAsJsonAsync("api/Incident/create", createIncident);
+            if (!response.IsSuccessStatusCode)
+            {
+                Message = await response.Content.ReadAsStringAsync();
+                return;
+            }
+            Message = "Your incident has been logged successfully.";
+            MyIncidents = await Http.GetFromJsonAsync<List<IncidentResponse>>("api/Incident/my") ?? new();
+            CloseModal();
+        }
+        catch (HttpRequestException)
+        {
+            Message = "Unable to submit the incident. Check that the Web API is running.";
+        }
+    }
+
+        private void EditIncident(Incident incident)
+    {
+        NewIncident = new Incident
+        {
+            IncidentId = incident.IncidentId,
+            Title = incident.Title,
+            Description = incident.Description,
+            Status = incident.Status,
+            Priority = incident.Priority,
+            AssignedTo = incident.AssignedTo,
+            CreatedDate = incident.CreatedDate,
+        };
+
+        var assignedUser = Users.FirstOrDefault(u => u.Username == incident.AssignedTo);
+        if (assignedUser != null)
+        {
+            SelectedRole = assignedUser.Role;
+            FilteredUsersByRole = Users.Where(u => u.Role == SelectedRole).ToList();
+        }
+
+        IsModalOpen = true;
+    }
+
+    private void AskDeleteConfirmation(int id)
+    {
+        pendingIncidentId = id;
+        var incident = IncidentService.GetIncident(id);
+        confirmDialog.Show("Confirm Delete", $"Are you sure you want to delete incident '{incident?.Title}'?");
+    }
+
+    private void ConfirmDelete()
+    {
+        //IncidentService.DeleteIncident(pendingIncidentId);
+    }
+
+    private void CancelDelete()
+    {
+        // No action, just close popup
+    }
+}

@@ -1,0 +1,142 @@
+@page "/profile-management"
+@layout DashboardLayout
+@using System.Net.Http.Json
+@using IncidentManagement.Application.Dtos.Responses
+@using IncidentManagement.Shared.Services
+@using IncidentManagement.WebClient.Components
+@inject NavigationManager NavManager
+@inject HttpClient Http
+@inject AuthState AuthState
+
+<ConfirmDialog @ref="confirmDialog" OnConfirm="ConfirmAction" OnCancel="CancelAction" />
+
+@if (!AuthState.IsLoggedIn)
+{
+    <div class="profile-container">
+        <h2>Access denied</h2>
+        <p class="subtitle">Please log in to continue.</p>
+        <button class="btn-action" @onclick='() => NavManager.NavigateTo("/login")'>Go to login</button>
+    </div>
+}
+else if (!string.Equals(AuthState.CurrentUserRole, "Admin", StringComparison.OrdinalIgnoreCase))
+{
+    <div class="profile-container">
+        <h2>Access denied</h2>
+        <p class="subtitle">Only administrators can manage user accounts.</p>
+    </div>
+}
+else
+{
+    <div class="profile-container">
+        <h2>User Profile Management</h2>
+        <p class="subtitle">Search, view, and manage system users</p>
+        @if (!string.IsNullOrWhiteSpace(message)) { <p class="subtitle">@message</p> }
+        <div class="form-group">
+            <input id="search" class="form-control" placeholder="Search by Username"
+                   value="@searchTerm" @oninput="OnSearchChanged" />
+        </div>
+        @if (isLoading) { <p>Loading users...</p> }
+        else
+        {
+            <table class="incident-table">
+                <thead><tr><th>Username</th><th>Email</th><th>Role</th><th>Contact</th><th>WhatsApp</th><th>Status</th><th>Actions</th></tr></thead>
+                <tbody>
+                    @foreach (var user in PagedUsers)
+                    {
+                        <tr>
+                            <td>@user.Username</td><td>@user.Email</td><td>@user.RoleName</td>
+                            <td>@user.PhoneNumber</td><td>@user.WhatsAppNumber</td>
+                            <td>@(user.IsActive ? "Active" : "Disabled")</td>
+                            <td>
+                                @if (user.IsActive)
+                                {
+                                    <button class="icon-btn danger" @onclick="() => AskConfirmation(user.Id, false)">Disable</button>
+                                }
+                                else
+                                {
+                                    <button class="icon-btn reactivate" @onclick="() => AskConfirmation(user.Id, true)">Enable</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <div class="paging-controls">
+                <button class="btn-action" @onclick="PrevPage" disabled="@(_pageIndex == 0)">Previous</button>
+                <span>Page @(_pageIndex + 1) of @Math.Max(1, _totalPages)</span>
+                <button class="btn-action" @onclick="NextPage" disabled="@(_pageIndex >= _totalPages - 1)">Next</button>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private List<UserResponse> users = new();
+    private string searchTerm = string.Empty;
+    private string message = string.Empty;
+    private bool isLoading = true;
+    private int _pageIndex;
+    private const int _pageSize = 5;
+    private int _totalPages => (int)Math.Ceiling((double)FilteredUsers.Count / _pageSize);
+    private List<UserResponse> FilteredUsers => string.IsNullOrWhiteSpace(searchTerm)
+        ? users : users.Where(u => u.Username.Contains(searchTerm, StringComparison.OrdinalIgnoreCase)
+            || u.Email.Contains(searchTerm, StringComparison.OrdinalIgnoreCase)).ToList();
+    private List<UserResponse> PagedUsers => FilteredUsers.Skip(_pageIndex * _pageSize).Take(_pageSize).ToList();
+    private ConfirmDialog? confirmDialog;
+    private int pendingUserId;
+    private bool pendingActive;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!IsAdmin()) return;
+        Http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", AuthState.AccessToken);
+        await LoadUsers();
+    }
+
+    private bool IsAdmin() => AuthState.IsLoggedIn &&
+        string.Equals(AuthState.CurrentUserRole, "Admin", StringComparison.OrdinalIgnoreCase);
+
+    private async Task LoadUsers()
+    {
+        isLoading = true;
+        try
+        {
+            users = await Http.GetFromJsonAsync<List<UserResponse>>("api/User") ?? new();
+            message = string.Empty;
+        }
+        catch (Exception)
+        {
+            message = "Unable to load users. Please check your connection and administrator access.";
+        }
+        finally { isLoading = false; }
+    }
+
+    private void OnSearchChanged(ChangeEventArgs e) { searchTerm = e.Value?.ToString() ?? string.Empty; _pageIndex = 0; }
+    private void PrevPage() { if (_pageIndex > 0) _pageIndex--; }
+    private void NextPage() { if (_pageIndex < _totalPages - 1) _pageIndex++; }
+
+    private void AskConfirmation(int userId, bool active)
+    {
+        pendingUserId = userId;
+        pendingActive = active;
+        confirmDialog?.Show("Confirm Action", $"Are you sure you want to {(active ? "enable" : "disable")} this user?");
+    }
+
+    private async Task ConfirmAction()
+    {
+        try
+        {
+            var response = await Http.PutAsJsonAsync("api/User/status", new { UserId = pendingUserId, IsActive = pendingActive });
+            if (response.IsSuccessStatusCode)
+            {
+                message = pendingActive ? "User enabled successfully." : "User disabled successfully.";
+                await LoadUsers();
+            }
+            else message = await response.Content.ReadAsStringAsync();
+        }
+        catch (Exception) { message = "Unable to update the user status."; }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void CancelAction() { }
+}

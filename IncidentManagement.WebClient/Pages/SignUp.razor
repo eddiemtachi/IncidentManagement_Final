@@ -1,0 +1,135 @@
+@page "/signup"
+@layout DashboardLayout
+@using System.Net.Http.Json
+@using IncidentManagement.Application.Dtos.Responses
+@using IncidentManagement.Shared.Models
+@using IncidentManagement.WebClient.Components
+@inject IJSRuntime JS
+@inject NavigationManager NavManager
+@inject HttpClient Http
+
+<OkComponent @ref="popup" OnOk="RedirectToLogin" />
+
+<div class="signup-container">
+    <h2>Create Your Account</h2>
+    <p class="subtitle">Sign up to access the Incident Management System</p>
+
+    <EditForm Model="@newUser" OnValidSubmit="HandleSignUp">
+        <DataAnnotationsValidator />
+        <ValidationSummary />
+
+        <div class="form-group">
+            <label for="username">Full Name</label>
+            <InputText id="username" class="form-control" @bind-Value="newUser.Username" />
+            <ValidationMessage For="@(() => newUser.Username)" />
+        </div>
+        <div class="form-group">
+            <label for="email">Email</label>
+            <InputText id="email" class="form-control" @bind-Value="newUser.Email" />
+            <ValidationMessage For="@(() => newUser.Email)" />
+        </div>
+        <div class="form-group">
+            <label for="password">Password</label>
+            <InputText id="password" type="password" class="form-control" @bind-Value="newUser.Password" />
+            <ValidationMessage For="@(() => newUser.Password)" />
+        </div>
+        <div class="form-group">
+            <label for="confirmPassword">Confirm Password</label>
+            <InputText id="confirmPassword" type="password" class="form-control" @bind-Value="newUser.ConfirmPassword" />
+            <ValidationMessage For="@(() => newUser.ConfirmPassword)" />
+        </div>
+        <div class="form-group">
+            <label for="phoneNumber">Phone Number</label>
+            <InputText id="phoneNumber" class="form-control" @bind-Value="newUser.PhoneNumber" />
+        </div>
+        <div class="form-group">
+            <label for="whatsappNumber">WhatsApp Number</label>
+            <InputText id="whatsappNumber" class="form-control" @bind-Value="newUser.WhatsAppNumber" />
+        </div>
+        <div class="form-group">
+            <label for="property">Property</label>
+            <InputSelect id="property" class="form-control" @bind-Value="selectedPropertyId">
+                <option value="0">Select a property</option>
+                @foreach (var property in properties)
+                {
+                    <option value="@property.PropertyId">@property.PropertyName</option>
+                }
+            </InputSelect>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(errorMessage))
+        {
+            <div class="error-message">@errorMessage</div>
+        }
+        <button type="submit" class="btn-action" disabled="@isSubmitting">@(isSubmitting ? "Creating account..." : "Sign Up")</button>
+    </EditForm>
+</div>
+
+@code {
+    private User newUser = new() { Role = "User" };
+    private OkComponent? popup;
+    private List<IncidentPropertyResponse> properties = new();
+    private int selectedPropertyId;
+    private string errorMessage = string.Empty;
+    private bool isSubmitting;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            properties = await Http.GetFromJsonAsync<List<IncidentPropertyResponse>>("api/IncidentProperty/all") ?? new();
+        }
+        catch (HttpRequestException)
+        {
+            errorMessage = "Unable to load properties. Check that the WebAPI is running.";
+        }
+    }
+
+    private async Task HandleSignUp()
+    {
+        errorMessage = string.Empty;
+        if (newUser.Password != newUser.ConfirmPassword)
+        {
+            errorMessage = "Passwords do not match.";
+            return;
+        }
+        if (selectedPropertyId <= 0)
+        {
+            errorMessage = "Please select a property.";
+            return;
+        }
+
+        isSubmitting = true;
+        try
+        {
+            var response = await Http.PostAsJsonAsync("api/RegisterUser/register", new
+            {
+                Username = newUser.Username,
+                Email = newUser.Email,
+                Password = newUser.Password,
+                PhoneNumber = newUser.PhoneNumber,
+                WhatsAppNumber = newUser.WhatsAppNumber,
+                PropertyId = selectedPropertyId
+            });
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync();
+                errorMessage = string.IsNullOrWhiteSpace(body) ? "Registration failed." : body;
+                return;
+            }
+
+            popup?.Show("Sign Up Successful", $"User {newUser.Username} created successfully!");
+        }
+        catch (HttpRequestException)
+        {
+            errorMessage = "Unable to reach the registration server.";
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+
+    private void RedirectToLogin() => NavManager.NavigateTo("/login");
+}
