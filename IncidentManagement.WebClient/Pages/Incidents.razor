@@ -95,16 +95,6 @@
                     </select>
 
                     <!-- Role Team dropdown -->
-                    <label>Role Team</label>
-                    <select @bind="SelectedRoleId">
-                        <option value="">-- Select Role --</option>
-                        @foreach (var role in IncidentRoles)
-                        {
-                            <option value="@role.RoleId">
-                                @role.RoleName
-                            </option>
-                        }
-                    </select>
                 }
 
                 <label>Address</label>
@@ -153,9 +143,19 @@
         </select>
     </div>
 
-    @if (!string.IsNullOrWhiteSpace(Message)) { <p class="subtitle">@Message</p> }
-    @if (IsLoading) { <p>Loading your incidents...</p> }
-    else if (!MyIncidents.Any()) { <p>No incidents have been logged by your account yet.</p> }
+    @if (!string.IsNullOrWhiteSpace(Message))
+    {
+        <p class="subtitle">@Message</p>
+    }
+    @if (IsLoading)
+    {
+        <p>Loading your incidents...</p>
+    }
+    else if (!MyIncidents.Any())
+    {
+
+        <p>No incidents have been logged by your account yet.</p>
+    }
     else
     {
         <table class="incident-table">
@@ -163,9 +163,31 @@
             <tbody>
                 @foreach (var incident in FilteredMyIncidents)
                 {
-                    <tr><td>@incident.IncidentId</td><td>@incident.Title</td><td>@incident.CategoryName</td>
-                        <td>@incident.SeverityName</td><td>@incident.StatusName</td><td>@incident.PriorityName</td>
-                        <td>@incident.PropertyName</td><td>@incident.CreatedAt.ToLocalTime().ToString("g")</td></tr>
+                    <tr>
+                        <td>@incident.IncidentId</td>
+                        <td>@incident.Title</td>
+                        <td>@incident.CategoryName</td>
+                        <td>@incident.SeverityName</td>
+                        <td>
+                            @if (IsAdmin)
+                            {
+                                <select class="form-select" @bind="SelectedStatusIds[incident.IncidentId]">
+                                    @foreach (var status in IncidentStatuses)
+                                    {
+                                        <option value="@status.StatusId">@status.StatusName</option>
+                                    }
+                                </select>
+                                <button class="save-btn" @onclick="() => SaveIncidentStatus(incident.IncidentId)">Save Status</button>
+                            }
+                            else
+                            {
+                                <strong>@incident.StatusName</strong>
+                            }
+                        </td>
+                        <td>@incident.PriorityName</td>
+                        <td>@incident.PropertyName</td>
+                        <td>@incident.CreatedAt.ToLocalTime().ToString("g")</td>
+                    </tr>
                 }
             </tbody>
         </table>
@@ -300,8 +322,13 @@
     private IEnumerable<IncidentResponse> FilteredMyIncidents => MyIncidents.Where(i =>
         (string.IsNullOrWhiteSpace(SearchTitle) || i.Title.Contains(SearchTitle, StringComparison.OrdinalIgnoreCase)) &&
         (string.IsNullOrWhiteSpace(FilterStatus) || i.StatusName == FilterStatus) &&
-        (string.IsNullOrWhiteSpace(FilterPriority) || i.PriorityName == FilterPriority));
+        (string.IsNullOrWhiteSpace(FilterPriority) || i.PriorityName == FilterPriority) &&
+        (string.IsNullOrWhiteSpace(FilterAssignedTo) || i.ReporterName == FilterAssignedTo));
     private string Message = string.Empty;
+
+    private bool IsAdmin => string.Equals(AuthState.CurrentUserRole, "Admin", StringComparison.OrdinalIgnoreCase);
+    private string IncidentsEndpoint => IsAdmin ? "api/Incident/all" : "api/Incident/my";
+    private Dictionary<int, int> SelectedStatusIds = new();
 
     protected override async Task OnInitializedAsync()
     {
@@ -317,8 +344,9 @@
 
         try
         {
-            MyIncidents = await Http.GetFromJsonAsync<List<IncidentResponse>>("api/Incident/my") ?? new();
+            MyIncidents = await Http.GetFromJsonAsync<List<IncidentResponse>>(IncidentsEndpoint) ?? new();
             IncidentStatuses = await LookupCacheService.GetIncidentStatusesAsync();
+            SyncSelectedStatuses();
             IncidentPriorities = await LookupCacheService.GetIncidentPrioritiesAsync();
             IncidentRoles = await LookupCacheService.GetIncidentRolesAsync();
             IncidentCategories = await LookupCacheService.GetIncidentCategoriesAsync();
@@ -427,7 +455,8 @@
                 return;
             }
             Message = "Your incident has been logged successfully.";
-            MyIncidents = await Http.GetFromJsonAsync<List<IncidentResponse>>("api/Incident/my") ?? new();
+            MyIncidents = await Http.GetFromJsonAsync<List<IncidentResponse>>(IncidentsEndpoint) ?? new();
+            SyncSelectedStatuses();
             CloseModal();
         }
         catch (HttpRequestException)
@@ -436,7 +465,58 @@
         }
     }
 
-        private void EditIncident(Incident incident)
+    private void SyncSelectedStatuses()
+    {
+        SelectedStatusIds = new Dictionary<int, int>();
+
+        foreach (var incident in MyIncidents)
+        {
+            var matchingStatus = IncidentStatuses.FirstOrDefault(
+                status => string.Equals(status.StatusName, incident.StatusName, StringComparison.OrdinalIgnoreCase));
+
+            SelectedStatusIds[incident.IncidentId] = matchingStatus?.StatusId
+                ?? IncidentStatuses.FirstOrDefault()?.StatusId
+                ?? 0;
+        }
+    }
+
+    private async Task SaveIncidentStatus(int incidentId)
+    {
+        if (!IsAdmin)
+        {
+            Message = "Only an administrator can update an incident status.";
+            return;
+        }
+
+        if (!SelectedStatusIds.TryGetValue(incidentId, out var statusId) || statusId <= 0)
+        {
+            Message = "Please select a valid incident status.";
+            return;
+        }
+
+        try
+        {
+            var request = new UpdateIncidentStatusRequest(incidentId, statusId);
+            var response = await Http.PutAsJsonAsync("api/Incident/status", request);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Message = await response.Content.ReadAsStringAsync();
+                return;
+            }
+
+            // Reload from the API so the saved status is displayed immediately.
+            MyIncidents = await Http.GetFromJsonAsync<List<IncidentResponse>>(IncidentsEndpoint) ?? new();
+            SyncSelectedStatuses();
+            Message = $"Status for incident #{incidentId} updated successfully. The resident will see the new status when they refresh their incidents page.";
+        }
+        catch (HttpRequestException)
+        {
+            Message = "Unable to update the incident status. Check that the Web API is running.";
+        }
+    }
+
+    private void EditIncident(Incident incident)
     {
         NewIncident = new Incident
         {
